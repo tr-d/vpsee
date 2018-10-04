@@ -18,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling/autoscalingiface"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/ec2iface"
+	"github.com/aws/aws-sdk-go-v2/service/elb"
+	"github.com/aws/aws-sdk-go-v2/service/elb/elbiface"
 	"github.com/aws/aws-sdk-go-v2/service/elbv2"
 	"github.com/aws/aws-sdk-go-v2/service/elbv2/elbv2iface"
 )
@@ -134,13 +136,16 @@ func (l *leaf) writeTo(w io.Writer) {
 		fmt.Fprintf(w, in+"%s\t%s\t%s\t%s\n", *v.SubnetId, *v.CidrBlock,
 			*v.AvailabilityZone, pub[*v.MapPublicIpOnLaunch])
 	case autoscaling.Group:
-		fmt.Fprintf(w, in+"%s\n", *v.AutoScalingGroupName)
+		fmt.Fprintf(w, in+"asg %s\n", *v.AutoScalingGroupName)
 	case ec2.InternetGateway:
 		fmt.Fprintf(w, in+"%s\n", *v.InternetGatewayId)
 	case ec2.NatGateway:
 		fmt.Fprintf(w, in+"%s\n", *v.NatGatewayId)
 	case elbv2.LoadBalancer:
-		fmt.Fprintf(w, in+"%s\t%s\t%s\n", *v.LoadBalancerName, v.Type, v.Scheme)
+		t := string(v.Type)[0:1]
+		fmt.Fprintf(w, in+"%slb %s\t%s\n", t, *v.LoadBalancerName, v.Scheme)
+	case elb.LoadBalancerDescription:
+		fmt.Fprintf(w, in+"elb %s\t%s\n", *v.LoadBalancerName, *v.Scheme)
 	}
 
 	for _, c := range l.cn {
@@ -189,7 +194,7 @@ func (l *leaf) subnets(id string) error {
 }
 
 func (l *leaf) asgs(id string) {
-	for _, v := range allAsg {
+	for _, v := range all.asgs {
 		if strings.Contains(*v.VPCZoneIdentifier, id) {
 			l.spawn(v)
 		}
@@ -197,7 +202,12 @@ func (l *leaf) asgs(id string) {
 }
 
 func (l *leaf) elbs(id string) {
-	for _, v := range allElb {
+	for _, v := range all.elbs {
+		if *v.VPCId == id {
+			l.spawn(v)
+		}
+	}
+	for _, v := range all.elbv2s {
 		if *v.VpcId == id {
 			l.spawn(v)
 		}
@@ -243,7 +253,7 @@ func (l *leaf) nats(id string) error {
 }
 
 func getAsgs() ([]autoscaling.Group, error) {
-	req := svc.asg.DescribeAutoScalingGroupsRequest(&autoscaling.DescribeAutoScalingGroupsInput{})
+	req := svc.asg.DescribeAutoScalingGroupsRequest(nil)
 	p := req.Paginate()
 	asgs := []autoscaling.Group{}
 	for p.Next() {
@@ -252,8 +262,18 @@ func getAsgs() ([]autoscaling.Group, error) {
 	return asgs, p.Err()
 }
 
-func getElbs() ([]elbv2.LoadBalancer, error) {
-	req := svc.elb.DescribeLoadBalancersRequest(&elbv2.DescribeLoadBalancersInput{})
+func getElbs() ([]elb.LoadBalancerDescription, error) {
+	req := svc.elb.DescribeLoadBalancersRequest(nil)
+	p := req.Paginate()
+	elbs := []elb.LoadBalancerDescription{}
+	for p.Next() {
+		elbs = append(elbs, p.CurrentPage().LoadBalancerDescriptions...)
+	}
+	return elbs, p.Err()
+}
+
+func getElbv2s() ([]elbv2.LoadBalancer, error) {
+	req := svc.elbv2.DescribeLoadBalancersRequest(nil)
 	p := req.Paginate()
 	elbs := []elbv2.LoadBalancer{}
 	for p.Next() {
@@ -274,15 +294,19 @@ func getName(tags []ec2.Tag) string {
 }
 
 var (
-	allAsg []autoscaling.Group
-	allElb []elbv2.LoadBalancer
+	all = struct {
+		asgs   []autoscaling.Group
+		elbs   []elb.LoadBalancerDescription
+		elbv2s []elbv2.LoadBalancer
+	}{}
 
 	exr expander
 
 	svc = struct {
-		asg autoscalingiface.AutoScalingAPI
-		ec2 ec2iface.EC2API
-		elb elbv2iface.ELBV2API
+		asg   autoscalingiface.AutoScalingAPI
+		ec2   ec2iface.EC2API
+		elb   elbiface.ELBAPI
+		elbv2 elbv2iface.ELBV2API
 	}{}
 
 	verbose bool
@@ -295,7 +319,8 @@ func init() {
 	}
 	svc.ec2 = ec2.New(cfg)
 	svc.asg = autoscaling.New(cfg)
-	svc.elb = elbv2.New(cfg)
+	svc.elb = elb.New(cfg)
+	svc.elbv2 = elbv2.New(cfg)
 
 	exr = expander{
 		q:  make(chan *leaf, 27),
@@ -311,15 +336,20 @@ func main() {
 	errs := make(chan error)
 	go func() {
 		asgs, err := getAsgs()
-		allAsg = asgs
+		all.asgs = asgs
 		errs <- err
 	}()
 	go func() {
 		elbs, err := getElbs()
-		allElb = elbs
+		all.elbs = elbs
 		errs <- err
 	}()
-	for i := 0; i < 2; i++ {
+	go func() {
+		elbs, err := getElbv2s()
+		all.elbv2s = elbs
+		errs <- err
+	}()
+	for i := 0; i < 3; i++ {
 		if err := <-errs; err != nil {
 			log.Fatal(err)
 		}
