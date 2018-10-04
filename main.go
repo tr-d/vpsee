@@ -36,11 +36,13 @@ func (e expander) enqueue(l *leaf) {
 }
 
 func (e expander) expand(ctx context.Context) {
-	ws := []string{"mary", "chad", "lucy", "greg", "faye", "bort"}
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
 
 	q := make(chan *leaf)
-	done := make(chan struct{})
-
 	go func() {
 		ls := []*leaf{}
 		for {
@@ -62,6 +64,7 @@ func (e expander) expand(ctx context.Context) {
 		}
 	}()
 
+	ws := []string{"mary", "chad", "lucy", "greg", "faye", "bort"}
 	for _, w := range ws {
 		go func(w string) {
 			for l := range q {
@@ -78,11 +81,6 @@ func (e expander) expand(ctx context.Context) {
 			}
 		}(w)
 	}
-
-	go func() {
-		e.wg.Wait()
-		close(done)
-	}()
 
 	select {
 	case <-done:
