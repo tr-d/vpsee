@@ -32,16 +32,41 @@ func (e expander) enqueue(l *leaf) {
 		log.Printf("enqueue %T", l.v)
 	}
 	e.wg.Add(1)
-	go func() {
-		e.q <- l
-	}()
+	e.q <- l
 }
 
 func (e expander) expand(ctx context.Context) {
 	ws := []string{"mary", "chad", "lucy", "greg", "faye", "bort"}
+
+	q := make(chan *leaf)
+	done := make(chan struct{})
+
+	go func() {
+		ls := []*leaf{}
+		for {
+			var l *leaf
+			if len(ls) > 0 {
+				l = ls[0]
+			}
+			select {
+			case l := <-e.q:
+				ls = append(ls, l)
+			case q <- l:
+				if len(ls) > 0 {
+					ls = ls[1:]
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	for _, w := range ws {
 		go func(w string) {
-			for l := range e.q {
+			for l := range q {
+				if l == nil {
+					continue
+				}
 				if verbose {
 					log.Printf("%s: expand %T", w, l.v)
 				}
@@ -52,16 +77,17 @@ func (e expander) expand(ctx context.Context) {
 			}
 		}(w)
 	}
-	done := make(chan struct{})
+
 	go func() {
 		e.wg.Wait()
 		close(done)
 	}()
+
 	select {
 	case <-done:
 	case <-ctx.Done():
 	}
-	close(e.q)
+	close(q)
 }
 
 type leaf struct {
