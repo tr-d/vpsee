@@ -56,6 +56,7 @@ func (e expander) expand(ctx context.Context) {
 					ls = ls[1:]
 				}
 			case <-done:
+				close(q)
 				return
 			}
 		}
@@ -87,7 +88,6 @@ func (e expander) expand(ctx context.Context) {
 	case <-done:
 	case <-ctx.Done():
 	}
-	close(q)
 }
 
 type leaf struct {
