@@ -146,6 +146,11 @@ func (l *leaf) writeTo(w io.Writer) {
 		fmt.Fprintf(w, in+"%slb %s\t%s\n", t, *v.LoadBalancerName, v.Scheme)
 	case elb.LoadBalancerDescription:
 		fmt.Fprintf(w, in+"elb %s\t%s\n", *v.LoadBalancerName, *v.Scheme)
+		for _, ld := range v.ListenerDescriptions {
+			l := ld.Listener
+			fmt.Fprintf(w, in+"  \t%s %d\t->\t%s %d\n", *l.Protocol,
+				*l.LoadBalancerPort, *l.InstanceProtocol, *l.InstancePort)
+		}
 	}
 
 	for _, c := range l.cn {
